@@ -2,6 +2,7 @@ package main
 
 import (
 	audio "azul3d.org/audio.v1"
+	_ "azul3d.org/audio/flac.dev"
 	_ "azul3d.org/audio/wav.v1"
 	al "azul3d.org/native/al.v1"
 	"log"
@@ -51,7 +52,21 @@ func main() {
 
 	device.SourcePlayv(sources)
 
-	time.Sleep(time.Duration(duration * float64(time.Second)))
+	for {
+		stopped := 0
+		for _, source := range sources {
+			var state int32
+			device.GetSourcei(source, al.SOURCE_STATE, &state)
+			if state != al.PLAYING {
+				stopped++
+			}
+		}
+		if stopped == len(sources) {
+			// everything is stopped
+			break
+		}
+		time.Sleep(time.Second / 2)
+	}
 
 	device.DeleteSources(int32(len(sources)), &sources[0])
 	device.DeleteBuffers(int32(len(buffers)), &buffers[0])
@@ -78,18 +93,29 @@ func readFile(filename string) (data []audio.PCM16, duration float64, config aud
 	log.Printf("Decoding a %s file.\n", format)
 	log.Println(config)
 
+	// guess (mostly accurate for WAVs)
 	duration = float64(fi.Size()) / float64(config.SampleRate*config.Channels*16/8)
 
 	// Create a buffer that can hold 3 second of audio samples
-	bufSize := int(duration * float64(config.SampleRate*config.Channels)) // this might be too big
+	bufSize := int(duration * float64(config.SampleRate*config.Channels)) // undersized for flac files
 	// Most WAVs are PCM16
-	buf := make(audio.PCM16Samples, bufSize)
+	samples := make(audio.PCM16Samples, 0, bufSize)
 
-	// Fill the buffer with as many audio samples as we can
-	read, err := decoder.Read(buf)
-	if err != nil && err != audio.EOS {
-		log.Panic(err)
+	// Fill our samples slice
+	var read int
+	buf := make(audio.PCM16Samples, 1024*1000)
+	err = nil
+	for err != audio.EOS {
+		var r int
+		r, err = decoder.Read(buf)
+		if err != nil && err != audio.EOS {
+			panic(err)
+		}
+		read += r
+		samples = append(samples, buf[:r]...)
 	}
 
-	return []audio.PCM16(buf)[:read], duration, config
+	duration = 1 / float64(config.SampleRate) * float64(read)
+
+	return []audio.PCM16(samples)[:read], duration, config
 }
